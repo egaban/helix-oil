@@ -406,6 +406,8 @@ impl MappableCommand {
         file_explorer, "Open file explorer in workspace root",
         file_explorer_in_current_buffer_directory, "Open file explorer at current buffer's directory",
         file_explorer_in_current_directory, "Open file explorer at current working directory",
+        oil_open, "Open parent directory as editable buffer",
+        oil_enter, "Open file or directory under cursor in oil buffer",
         code_action, "Perform code action",
         buffer_picker, "Open buffer picker",
         jumplist_picker, "Open jumplist picker",
@@ -3282,6 +3284,140 @@ fn file_explorer_in_current_directory(cx: &mut Context) {
 
     if let Ok(picker) = ui::file_explorer(cwd, cx.editor) {
         cx.push_layer(Box::new(overlaid(picker)));
+    }
+}
+
+fn oil_open(cx: &mut Context) {
+    let (_view, doc) = current_ref!(cx.editor);
+    let doc_id = doc.id();
+
+    // If currently in an oil buffer, navigate to parent directory
+    if let Some(state) = cx.editor.oil_buffers.get(&doc_id) {
+        let dir = state.directory.clone();
+        let parent = dir
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| dir.clone());
+        if parent == dir {
+            cx.editor.set_status("Already at filesystem root");
+            return;
+        }
+        oil_open_directory(cx, parent);
+        return;
+    }
+
+    // Normal buffer: get parent directory of current file
+    let dir = doc
+        .path()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(helix_stdx::env::current_working_dir);
+
+    oil_open_directory(cx, dir);
+}
+
+fn oil_open_directory(cx: &mut Context, dir: PathBuf) {
+    use helix_view::oil;
+
+    if !dir.exists() {
+        cx.editor.set_error(format!(
+            "Directory does not exist: {}",
+            dir.display()
+        ));
+        return;
+    }
+
+    let entries = match ui::directory_content(&dir, cx.editor) {
+        Ok(entries) => entries,
+        Err(e) => {
+            cx.editor
+                .set_error(format!("Failed to read directory: {}", e));
+            return;
+        }
+    };
+
+    // Filter out the ".." entry - we handle parent navigation via `-` key
+    let entries: Vec<_> = entries
+        .into_iter()
+        .filter(|(path, _)| {
+            path.file_name()
+                .map_or(true, |name| name != "..")
+        })
+        .collect();
+
+    let (rope, state) = oil::build_oil_buffer(&dir, entries);
+
+    let doc = Document::from(
+        rope,
+        None,
+        cx.editor.config.clone(),
+        cx.editor.syn_loader.clone(),
+    );
+
+    let doc_id = cx.editor.new_file_from_document(Action::Replace, doc);
+    cx.editor.oil_buffers.insert(doc_id, state);
+
+    // Reset the modified flag since this is a fresh directory listing
+    let doc = doc_mut!(cx.editor, &doc_id);
+    doc.reset_modified();
+
+    let display_dir = dir.display().to_string();
+    cx.editor
+        .set_status(format!("[oil] {}", display_dir));
+}
+
+fn oil_enter(cx: &mut Context) {
+    use helix_view::oil;
+
+    let (view, doc) = current_ref!(cx.editor);
+    let doc_id = doc.id();
+
+    // Only operate in oil buffers
+    let state = match cx.editor.oil_buffers.get(&doc_id) {
+        Some(s) => s,
+        None => return,
+    };
+
+    // Get current line text
+    let text = doc.text().slice(..);
+    let cursor_pos = doc.selection(view.id).primary().cursor(text);
+    let line_idx = text.char_to_line(cursor_pos);
+    let line = text.line(line_idx).to_string();
+
+    let (entry_id, visible_name) = oil::parse_oil_line(&line);
+    let visible_name = visible_name.trim();
+
+    if visible_name.is_empty() {
+        return;
+    }
+
+    let directory = state.directory.clone();
+
+    // Determine if it's a directory and resolve the path
+    let (target, is_dir) = if let Some(id) = entry_id {
+        if let Some(entry) = state.original_entries.get(&id) {
+            (entry.path.clone(), entry.is_dir)
+        } else {
+            // ID not found - treat as new entry
+            let clean_name = visible_name.trim_end_matches('/');
+            (directory.join(clean_name), visible_name.ends_with('/'))
+        }
+    } else {
+        // No ID - new entry typed by user
+        let clean_name = visible_name.trim_end_matches('/');
+        (directory.join(clean_name), visible_name.ends_with('/'))
+    };
+
+    if is_dir {
+        let target = helix_stdx::path::normalize(&target);
+        oil_open_directory(cx, target);
+    } else if target.exists() {
+        if let Err(e) = cx.editor.open(&target, Action::Replace) {
+            cx.editor
+                .set_error(format!("Failed to open file: {}", e));
+        }
+    } else {
+        cx.editor
+            .set_status(format!("File does not exist yet: {}", target.display()));
     }
 }
 

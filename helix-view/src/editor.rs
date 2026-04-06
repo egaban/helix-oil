@@ -1259,6 +1259,10 @@ pub struct Editor {
 
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
+
+    /// Oil buffer state, keyed by DocumentId. Tracks directory listings
+    /// for oil-mode (edit filesystem as buffer) documents.
+    pub oil_buffers: HashMap<DocumentId, crate::oil::OilBufferState>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1382,6 +1386,7 @@ impl Editor {
             mouse_down_range: None,
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
+            oil_buffers: HashMap::new(),
         }
     }
 
@@ -1888,7 +1893,7 @@ impl Editor {
         id
     }
 
-    fn new_file_from_document(&mut self, action: Action, doc: Document) -> DocumentId {
+    pub fn new_file_from_document(&mut self, action: Action, doc: Document) -> DocumentId {
         let id = self.new_document(doc);
         self.switch(id, action);
         id
@@ -2022,6 +2027,9 @@ impl Editor {
                 }
             }
         }
+
+        // Clean up oil buffer state if this was an oil buffer
+        self.oil_buffers.remove(&doc_id);
 
         let doc = self.documents.remove(&doc_id).unwrap();
 

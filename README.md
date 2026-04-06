@@ -8,13 +8,13 @@
 </picture>
 </h1>
 
-[![Build status](https://github.com/helix-editor/helix/actions/workflows/build.yml/badge.svg)](https://github.com/helix-editor/helix/actions)
-[![GitHub Release](https://img.shields.io/github/v/release/helix-editor/helix)](https://github.com/helix-editor/helix/releases/latest)
-[![Documentation](https://shields.io/badge/-documentation-452859)](https://docs.helix-editor.com/)
-[![GitHub contributors](https://img.shields.io/github/contributors/helix-editor/helix)](https://github.com/helix-editor/helix/graphs/contributors)
-[![Matrix Space](https://img.shields.io/matrix/helix-community:matrix.org)](https://matrix.to/#/#helix-community:matrix.org)
-
 </div>
+
+> **This is a personal fork of [Helix](https://github.com/helix-editor/helix)**
+> that adds [oil.nvim](https://github.com/stevearc/oil.nvim)-style directory editing.
+> Built with [Claude Code](https://claude.ai/claude-code).
+
+---
 
 ![Screenshot](./screenshot.png)
 
@@ -23,12 +23,33 @@ A [Kakoune](https://github.com/mawww/kakoune) / [Neovim](https://github.com/neov
 The editing model is very heavily based on Kakoune; during development I found
 myself agreeing with most of Kakoune's design decisions.
 
-For more information, see the [website](https://helix-editor.com) or
+For more information, see the [upstream website](https://helix-editor.com) or
 [documentation](https://docs.helix-editor.com/).
 
 All shortcuts/keymaps can be found [in the documentation on the website](https://docs.helix-editor.com/keymap.html).
 
 [Troubleshooting](https://github.com/helix-editor/helix/wiki/Troubleshooting)
+
+# Oil mode (fork addition)
+
+Press `-` in normal mode to open the parent directory of the current file as an
+editable buffer. Navigate the filesystem the way you edit text.
+
+| Key | Context | Action |
+|-----|---------|--------|
+| `-` | Any buffer | Open parent directory as editable buffer |
+| `-` | Oil buffer | Go up to parent directory |
+| `Enter` | Oil buffer | Open file / enter directory |
+| `:w` | Oil buffer | Apply filesystem changes |
+
+**Editing the buffer edits the filesystem:**
+
+- **Rename** a file: edit its name in the buffer
+- **Delete** a file: delete its line
+- **Create** a file: add a new line with a filename (append `/` for directories)
+- **Save** with `:w` to apply all changes at once
+
+This mirrors [oil.nvim](https://github.com/stevearc/oil.nvim) for Neovim.
 
 # Features
 

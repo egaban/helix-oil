@@ -375,11 +375,217 @@ fn buffer_previous(
     Ok(())
 }
 
+fn oil_write_impl(cx: &mut compositor::Context) -> anyhow::Result<()> {
+    use helix_view::oil::{self, OilEntryId};
+
+    let doc = doc!(cx.editor);
+    let doc_id = doc.id();
+    let text = doc.text().clone();
+
+    let state = cx
+        .editor
+        .oil_buffers
+        .get(&doc_id)
+        .ok_or_else(|| anyhow::anyhow!("Not an oil buffer"))?;
+
+    let directory = state.directory.clone();
+
+    // Parse all lines to determine current state
+    let mut seen_ids: HashMap<OilEntryId, String> = HashMap::new();
+    let mut new_entries: Vec<String> = Vec::new();
+
+    for line_idx in 0..text.len_lines() {
+        let line = text.line(line_idx).to_string();
+        let (entry_id, visible_name) = oil::parse_oil_line(&line);
+        let visible_name = visible_name.trim().to_string();
+
+        if visible_name.is_empty() {
+            continue;
+        }
+
+        match entry_id {
+            Some(id) => {
+                seen_ids.insert(id, visible_name);
+            }
+            None => {
+                new_entries.push(visible_name);
+            }
+        }
+    }
+
+    // Diff against original state
+    let mut renames: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut creates: Vec<(PathBuf, bool)> = Vec::new();
+    let mut deletes: Vec<(PathBuf, bool)> = Vec::new();
+
+    for (id, original_entry) in &state.original_entries {
+        match seen_ids.get(id) {
+            Some(current_name) => {
+                if *current_name != original_entry.original_name {
+                    // Renamed
+                    let new_path =
+                        directory.join(current_name.trim_end_matches('/'));
+                    renames.push((original_entry.path.clone(), new_path));
+                }
+                // else: unchanged
+            }
+            None => {
+                // Deleted
+                deletes.push((original_entry.path.clone(), original_entry.is_dir));
+            }
+        }
+    }
+
+    for name in &new_entries {
+        let is_dir = name.ends_with('/');
+        let clean_name = name.trim_end_matches('/');
+        let path = directory.join(clean_name);
+        creates.push((path, is_dir));
+    }
+
+    let total_ops = renames.len() + creates.len() + deletes.len();
+    if total_ops == 0 {
+        cx.editor.set_status("[oil] No changes to apply");
+        // Reset modified flag
+        let doc = doc_mut!(cx.editor, &doc_id);
+        doc.reset_modified();
+        return Ok(());
+    }
+
+    // Apply operations: renames first, creates second, deletes last
+    let mut errors: Vec<String> = Vec::new();
+    let mut rename_count = 0;
+    let mut create_count = 0;
+    let mut delete_count = 0;
+
+    for (old_path, new_path) in &renames {
+        if let Some(parent) = new_path.parent() {
+            if !parent.exists() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    errors.push(format!("mkdir {}: {}", parent.display(), e));
+                    continue;
+                }
+            }
+        }
+        match std::fs::rename(old_path, new_path) {
+            Ok(()) => rename_count += 1,
+            Err(e) => errors.push(format!(
+                "rename {} -> {}: {}",
+                old_path.display(),
+                new_path.display(),
+                e
+            )),
+        }
+    }
+
+    for (path, is_dir) in &creates {
+        if *is_dir {
+            match std::fs::create_dir_all(path) {
+                Ok(()) => create_count += 1,
+                Err(e) => errors.push(format!("mkdir {}: {}", path.display(), e)),
+            }
+        } else {
+            if let Some(parent) = path.parent() {
+                if !parent.exists() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+            }
+            match std::fs::File::create(path) {
+                Ok(_) => create_count += 1,
+                Err(e) => errors.push(format!("create {}: {}", path.display(), e)),
+            }
+        }
+    }
+
+    for (path, is_dir) in &deletes {
+        let result = if *is_dir {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+        match result {
+            Ok(()) => delete_count += 1,
+            Err(e) => errors.push(format!("delete {}: {}", path.display(), e)),
+        }
+    }
+
+    // Refresh the oil buffer with updated directory listing
+    let entries = match crate::ui::directory_content(&directory, cx.editor) {
+        Ok(entries) => entries,
+        Err(e) => {
+            cx.editor
+                .set_error(format!("Failed to refresh directory: {}", e));
+            return Ok(());
+        }
+    };
+
+    // Filter out ".." entry
+    let entries: Vec<_> = entries
+        .into_iter()
+        .filter(|(path, _)| path.file_name().map_or(true, |name| name != ".."))
+        .collect();
+
+    let (rope, new_state) = oil::build_oil_buffer(&directory, entries);
+
+    // Replace the document text
+    let doc = doc_mut!(cx.editor, &doc_id);
+    let view = view_mut!(cx.editor);
+    let view_id = view.id;
+    doc.ensure_view_init(view_id);
+
+    let old_text = doc.text().clone();
+    let new_text: String = rope.slice(..).chunks().collect();
+    let transaction = Transaction::change(
+        &old_text,
+        [(0, old_text.len_chars(), Some(Tendril::from(new_text)))].into_iter(),
+    );
+    doc.apply(&transaction, view_id);
+    doc.append_changes_to_history(view);
+    doc.reset_modified();
+
+    // Update oil state
+    cx.editor.oil_buffers.insert(doc_id, new_state);
+
+    // Report results
+    let mut status_parts = Vec::new();
+    if rename_count > 0 {
+        status_parts.push(format!("{} renamed", rename_count));
+    }
+    if create_count > 0 {
+        status_parts.push(format!("{} created", create_count));
+    }
+    if delete_count > 0 {
+        status_parts.push(format!("{} deleted", delete_count));
+    }
+
+    if errors.is_empty() {
+        cx.editor
+            .set_status(format!("[oil] {}", status_parts.join(", ")));
+    } else {
+        cx.editor.set_error(format!(
+            "[oil] {} | Errors: {}",
+            status_parts.join(", "),
+            errors.join("; ")
+        ));
+    }
+
+    Ok(())
+}
+
 fn write_impl(
     cx: &mut compositor::Context,
     path: Option<&str>,
     options: WriteOptions,
 ) -> anyhow::Result<()> {
+    // Intercept oil buffer saves
+    {
+        let doc = doc!(cx.editor);
+        let doc_id = doc.id();
+        if cx.editor.oil_buffers.contains_key(&doc_id) {
+            return oil_write_impl(cx);
+        }
+    }
+
     let config = cx.editor.config();
     let jobs = &mut cx.jobs;
     let (view, doc) = current!(cx.editor);

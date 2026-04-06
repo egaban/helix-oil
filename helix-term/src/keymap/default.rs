@@ -338,6 +338,9 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
 
         "C-a" => increment,
         "C-x" => decrement,
+
+        "minus" => oil_open,
+        "ret" => oil_enter,
     });
     let mut select = normal.clone();
     select.merge_nodes(keymap!({ "Select mode"
