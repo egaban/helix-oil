@@ -32,6 +32,8 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
 
 # Oil mode (fork addition)
 
+![Oil mode example](./oil-example.png)
+
 Press `-` in normal mode to open the parent directory of the current file as an
 editable buffer. Navigate the filesystem the way you edit text.
 
