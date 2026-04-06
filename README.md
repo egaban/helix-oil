@@ -48,7 +48,7 @@ editable buffer. Navigate the filesystem the way you edit text.
 
 - **Rename** a file: edit its name in the buffer
 - **Delete** a file: delete its line
-- **Create** a file: add a new line with a filename (append `/` for directories)
+- **Create** a file: add a new line with a filename (append `/` for directories). Supports brace expansion, e.g. `foo.{c,h}` creates both files.
 - **Save** with `:w` to apply all changes at once
 
 This mirrors [oil.nvim](https://github.com/stevearc/oil.nvim) for Neovim.

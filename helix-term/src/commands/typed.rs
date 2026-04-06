@@ -439,8 +439,10 @@ fn oil_write_impl(cx: &mut compositor::Context) -> anyhow::Result<()> {
     for name in &new_entries {
         let is_dir = name.ends_with('/');
         let clean_name = name.trim_end_matches('/');
-        let path = directory.join(clean_name);
-        creates.push((path, is_dir));
+        for expanded in oil::expand_braces(clean_name) {
+            let path = directory.join(&expanded);
+            creates.push((path, is_dir));
+        }
     }
 
     let total_ops = renames.len() + creates.len() + deletes.len();

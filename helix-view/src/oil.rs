@@ -230,6 +230,34 @@ pub fn parse_oil_line_name(line: &str) -> (Option<OilEntryId>, &str) {
     (id, strip_icon(visible))
 }
 
+/// Expand brace alternations in a filename, e.g. `foo.{c,h}` → `["foo.c", "foo.h"]`.
+/// Only the last path component is checked for braces. If no braces are found,
+/// returns a single-element vec with the original name.
+pub fn expand_braces(name: &str) -> Vec<String> {
+    // Only look at the last path component (after the last '/')
+    let (prefix, last) = match name.rfind('/') {
+        Some(pos) => (&name[..=pos], &name[pos + 1..]),
+        None => ("", name),
+    };
+
+    // Match {alternatives} in the last component
+    if let Some(open) = last.find('{') {
+        if let Some(close) = last[open..].find('}') {
+            let close = open + close;
+            let before = &last[..open];
+            let after = &last[close + 1..];
+            let alternatives = &last[open + 1..close];
+
+            return alternatives
+                .split(',')
+                .map(|alt| format!("{}{}{}{}", prefix, before, alt, after))
+                .collect();
+        }
+    }
+
+    vec![name.to_string()]
+}
+
 /// Build the buffer text and oil state for a directory listing.
 pub fn build_oil_buffer(
     directory: &Path,
@@ -340,5 +368,41 @@ mod tests {
             let decoded = decode_oil_id(&encoded[WJ.len_utf8()..]);
             assert_eq!(decoded, Some(id), "roundtrip failed for {n}");
         }
+    }
+
+    #[test]
+    fn test_expand_braces_basic() {
+        assert_eq!(expand_braces("foo.{c,h}"), vec!["foo.c", "foo.h"]);
+    }
+
+    #[test]
+    fn test_expand_braces_multiple() {
+        assert_eq!(
+            expand_braces("foo.{js,test.js,spec.js}"),
+            vec!["foo.js", "foo.test.js", "foo.spec.js"]
+        );
+    }
+
+    #[test]
+    fn test_expand_braces_no_braces() {
+        assert_eq!(expand_braces("foo.c"), vec!["foo.c"]);
+    }
+
+    #[test]
+    fn test_expand_braces_with_path_prefix() {
+        assert_eq!(
+            expand_braces("src/foo.{c,h}"),
+            vec!["src/foo.c", "src/foo.h"]
+        );
+    }
+
+    #[test]
+    fn test_expand_braces_single_alt() {
+        assert_eq!(expand_braces("foo.{c}"), vec!["foo.c"]);
+    }
+
+    #[test]
+    fn test_expand_braces_unclosed() {
+        assert_eq!(expand_braces("foo.{c,h"), vec!["foo.{c,h"]);
     }
 }
