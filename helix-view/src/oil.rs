@@ -52,8 +52,12 @@ impl OilBufferState {
     }
 }
 
-// Zero-width space used as delimiter for entry IDs in buffer text.
-const ZWS: char = '\u{200B}';
+// Zero-width characters used for invisible ID encoding at the end of each line.
+// The ID is binary-encoded using two zero-width chars, preceded by a delimiter:
+//   <WJ><bits...>  where each bit is ZWS (0) or ZWNJ (1), MSB first.
+const ZWS: char = '\u{200B}'; // Zero Width Space  – binary 0
+const ZWNJ: char = '\u{200C}'; // Zero Width Non-Joiner – binary 1
+const WJ: char = '\u{2060}'; // Word Joiner – ID start delimiter
 
 /// Get a nerd font icon for a file based on its extension, or for a directory.
 fn file_icon(name: &str, is_dir: bool) -> &'static str {
@@ -146,10 +150,44 @@ fn file_icon(name: &str, is_dir: bool) -> &'static str {
     }
 }
 
-/// Format a single oil buffer line with embedded entry ID and icon.
+/// Encode an entry ID as an invisible binary string using zero-width characters.
+fn encode_oil_id(id: OilEntryId) -> String {
+    let mut s = String::new();
+    s.push(WJ);
+    let n = id.0;
+    if n == 0 {
+        s.push(ZWS);
+        return s;
+    }
+    let bits = 64 - n.leading_zeros();
+    for i in (0..bits).rev() {
+        if (n >> i) & 1 == 1 {
+            s.push(ZWNJ);
+        } else {
+            s.push(ZWS);
+        }
+    }
+    s
+}
+
+/// Decode an entry ID from a binary string of zero-width characters.
+fn decode_oil_id(s: &str) -> Option<OilEntryId> {
+    let mut n: u64 = 0;
+    for ch in s.chars() {
+        match ch {
+            ZWS => n = n.checked_mul(2)?,
+            ZWNJ => n = n.checked_mul(2)?.checked_add(1)?,
+            _ => return None,
+        }
+    }
+    Some(OilEntryId(n))
+}
+
+/// Format a single oil buffer line: ` <icon><name><invisible-id>\n`
 pub fn format_oil_line(id: OilEntryId, name: &str, is_dir: bool) -> String {
     let icon = file_icon(name, is_dir);
-    format!("{}{}{}{}{}\n", ZWS, id.0, ZWS, icon, name)
+    let encoded_id = encode_oil_id(id);
+    format!(" {}{}{}\n", icon, name, encoded_id)
 }
 
 /// Strip the leading icon (if any) from a visible name returned by `parse_oil_line`.
@@ -170,23 +208,16 @@ pub fn strip_icon(visible_name: &str) -> &str {
 
 /// Parse a line from an oil buffer.
 /// Returns (Option<OilEntryId>, visible_name) where visible_name includes the icon prefix.
+/// The ID is expected at the end of the line after a WJ delimiter: `<visible>\u{2060}<binary-id>`
 pub fn parse_oil_line(line: &str) -> (Option<OilEntryId>, &str) {
     let line = line.trim_end_matches('\n').trim_end_matches('\r');
 
-    if !line.starts_with(ZWS) {
-        return (None, line);
-    }
-
-    // Skip the first ZWS character
-    let after_first_zws = &line[ZWS.len_utf8()..];
-
-    // Find the second ZWS
-    if let Some(end_pos) = after_first_zws.find(ZWS) {
-        let id_str = &after_first_zws[..end_pos];
-        if let Ok(id) = id_str.parse::<u64>() {
-            let name_start = end_pos + ZWS.len_utf8();
-            let name = &after_first_zws[name_start..];
-            return (Some(OilEntryId(id)), name);
+    // Find the WJ delimiter that marks the start of the encoded ID
+    if let Some(wj_pos) = line.rfind(WJ) {
+        let after_wj = &line[wj_pos + WJ.len_utf8()..];
+        if let Some(id) = decode_oil_id(after_wj) {
+            let name = &line[..wj_pos];
+            return (Some(id), name);
         }
     }
 
@@ -278,5 +309,36 @@ mod tests {
         assert!(file_icon("main.rs", false).contains('\u{e7a8}'));
         assert!(file_icon("index.js", false).contains('\u{e74e}'));
         assert!(file_icon("src", true).contains('\u{f024b}'));
+    }
+
+    #[test]
+    fn test_line_starts_with_space() {
+        let id = OilEntryId(1);
+        let line = format_oil_line(id, "test.rs", false);
+        assert_eq!(line.chars().next().unwrap(), ' ', "line must start with a space");
+    }
+
+    #[test]
+    fn test_no_visible_id_digits() {
+        let id = OilEntryId(42);
+        let line = format_oil_line(id, "test.rs", false);
+        // The line should not contain any visible ASCII digit from the ID
+        // (digits in the filename are fine but "42" should not appear)
+        let (_, visible) = parse_oil_line(&line);
+        assert!(
+            !visible.contains("42"),
+            "ID digits must not appear in visible name"
+        );
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip() {
+        for n in [0, 1, 2, 7, 42, 255, 1000, u64::MAX] {
+            let id = OilEntryId(n);
+            let encoded = encode_oil_id(id);
+            // strip the leading WJ before decoding
+            let decoded = decode_oil_id(&encoded[WJ.len_utf8()..]);
+            assert_eq!(decoded, Some(id), "roundtrip failed for {n}");
+        }
     }
 }
