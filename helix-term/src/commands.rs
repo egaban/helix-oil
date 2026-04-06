@@ -3383,7 +3383,7 @@ fn oil_enter(cx: &mut Context) {
     let line_idx = text.char_to_line(cursor_pos);
     let line = text.line(line_idx).to_string();
 
-    let (entry_id, visible_name) = oil::parse_oil_line(&line);
+    let (entry_id, visible_name) = oil::parse_oil_line_name(&line);
     let visible_name = visible_name.trim();
 
     if visible_name.is_empty() {

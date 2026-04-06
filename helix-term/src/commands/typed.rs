@@ -396,7 +396,7 @@ fn oil_write_impl(cx: &mut compositor::Context) -> anyhow::Result<()> {
 
     for line_idx in 0..text.len_lines() {
         let line = text.line(line_idx).to_string();
-        let (entry_id, visible_name) = oil::parse_oil_line(&line);
+        let (entry_id, visible_name) = oil::parse_oil_line_name(&line);
         let visible_name = visible_name.trim().to_string();
 
         if visible_name.is_empty() {
