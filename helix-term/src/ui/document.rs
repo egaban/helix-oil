@@ -3,6 +3,7 @@ use std::cmp::min;
 use helix_core::doc_formatter::{DocumentFormatter, FormattedGrapheme, GraphemeSource, TextFormat};
 use helix_core::graphemes::Grapheme;
 use helix_core::str_utils::char_to_byte_idx;
+use helix_core::unicode::width::UnicodeWidthStr;
 use helix_core::syntax::{self, HighlightEvent, Highlighter, OverlayHighlights};
 use helix_core::text_annotations::TextAnnotations;
 use helix_core::{visual_offset_from_block, Position, RopeSlice};
@@ -354,6 +355,10 @@ impl<'a> TextRenderer<'a> {
             Grapheme::Other { ref g } if g == " " && !grapheme.source.is_eof() => space,
             Grapheme::Other { ref g } if g == "\u{00A0}" => nbsp,
             Grapheme::Other { ref g } if g == "\u{202F}" => nnbsp,
+            // The formatter reserves a column for zero-width graphemes (e.g. U+200B), but
+            // terminals don't advance the cursor when printing them, which desyncs the
+            // diff-based redraw. Draw a blank instead of the raw symbol.
+            Grapheme::Other { ref g } if g.width() == 0 => " ",
             Grapheme::Other { ref g } => g,
             Grapheme::Newline => &self.newline,
         };
